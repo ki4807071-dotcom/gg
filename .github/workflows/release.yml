@@ -1,0 +1,204 @@
+name: Release
+
+# Push a tag like v0.2.0 to build every platform into a draft GitHub release.
+# Publishing that draft makes it the release the app's updater offers
+# (releases/latest/download/latest.json).
+#
+# Secrets:
+#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#       Sign the update archives; the app checks them against plugins.updater.pubkey.
+#   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+#   APPLE_PROVISIONING_PROFILE (base64)
+#       Optional. Sign the Mac app with Developer ID and the profile that allows
+#       Communication Notifications; without them the Mac build is unsigned.
+#   APPLE_ID, APPLE_PASSWORD (app-specific), APPLE_TEAM_ID
+#       Optional. Notarize the signed Mac app.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  # One draft for every build to upload to. Each build used to find or create
+  # it by tag, and builds that started together each made their own (v0.1.12
+  # came out as two drafts, each with half the files and its own latest.json).
+  create-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.release.outputs.id }}
+    steps:
+      - id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          # A re-run uses the draft that is already there.
+          draft_id() { gh api "repos/$REPO/releases" --jq ".[] | select(.tag_name == \"$TAG\" and .draft) | .id" | head -1; }
+          id=$(draft_id)
+          # The new draft's id comes back from creating it: listing the
+          # releases right after can miss it (v0.1.13's check had no id).
+          if [ -z "$id" ]; then
+            id=$(gh api "repos/$REPO/releases" -f tag_name="$TAG" -f name="bimbimbambam $TAG" -f body="See the assets below to download bimbimbambam for your system." -F draft=true --jq .id)
+          fi
+          [ -n "$id" ] || { echo "No draft release for $TAG"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: create-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both Mac builds on GitHub's Intel Macs, the Apple Silicon one built
+        # for its target from there: its Apple Silicon Macs (macos-latest) ran
+        # short, and 0.1.32's Mac builds were cancelled twice, "not acquired
+        # by Runner" ("capacity constraints ... macOS arm64").
+        include:
+          - platform: macos-15-intel
+            target: aarch64-apple-darwin
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: ''
+          - platform: windows-latest
+            target: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: ${{ matrix.target }}
+      - run: npm ci
+
+      # The Apple variables are set only when their secrets are: Tauri tries to
+      # sign (or notarize) as soon as a variable exists, even when it is empty.
+      - name: Choose build options
+        id: options
+        shell: bash
+        env:
+          PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+          CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          NOTARY_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          args="--config src-tauri/tauri.release.conf.json"
+          if [ -n "${{ matrix.target }}" ]; then args="$args --target ${{ matrix.target }}"; fi
+          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$PROFILE" ] && [ -n "$CERTIFICATE" ]; then
+            mkdir -p src-tauri/signing
+            echo "$PROFILE" | base64 --decode > src-tauri/signing/bimbimbambam.provisionprofile
+            args="$args --config src-tauri/tauri.signed.conf.json"
+            {
+              echo "APPLE_CERTIFICATE=$CERTIFICATE"
+              echo "APPLE_CERTIFICATE_PASSWORD=$CERTIFICATE_PASSWORD"
+              echo "APPLE_SIGNING_IDENTITY=$SIGNING_IDENTITY"
+            } >> "$GITHUB_ENV"
+            if [ -n "$NOTARY_ID" ] && [ -n "$NOTARY_PASSWORD" ] && [ -n "$NOTARY_TEAM" ]; then
+              {
+                echo "APPLE_ID=$NOTARY_ID"
+                echo "APPLE_PASSWORD=$NOTARY_PASSWORD"
+                echo "APPLE_TEAM_ID=$NOTARY_TEAM"
+              } >> "$GITHUB_ENV"
+            fi
+            echo "Signing the Mac app"
+          fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+
+      - uses: tauri-apps/tauri-action@v0
+        id: tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.id }}
+          # Still set, so latest.json points at this version's files.
+          tagName: ${{ github.ref_name }}
+          releaseName: bimbimbambam ${{ github.ref_name }}
+          releaseBody: See the assets below to download bimbimbambam for your system.
+          releaseDraft: true
+          includeUpdaterJson: true
+          args: ${{ steps.options.outputs.args }}
+
+      # The same installers under names without the version, so the website can
+      # link to releases/latest/download/<name> and always get the newest one.
+      - name: Attach installers under stable names
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PATHS: ${{ steps.tauri.outputs.artifactPaths }}
+        run: |
+          mkdir -p stable
+          mac="bimbimbambam-mac-intel.dmg"
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then mac="bimbimbambam-mac-apple-silicon.dmg"; fi
+          echo "$PATHS" | jq -r '.[]' | while read -r path; do
+            if command -v cygpath >/dev/null; then path=$(cygpath -u "$path"); fi
+            case "$path" in
+              *.dmg) cp "$path" "stable/$mac" ;;
+              *-setup.exe) cp "$path" stable/bimbimbambam-windows-setup.exe ;;
+              *.msi) cp "$path" stable/bimbimbambam-windows.msi ;;
+              *.AppImage) cp "$path" stable/bimbimbambam-linux.AppImage ;;
+              *.deb) cp "$path" stable/bimbimbambam-linux.deb ;;
+              *.rpm) cp "$path" stable/bimbimbambam-linux.rpm ;;
+            esac
+          done
+          ls -la stable
+          gh release upload "${{ github.ref_name }}" stable/* --clobber --repo "${{ github.repository }}"
+
+      # Windows also as one .exe that runs without installing, for computers
+      # that don't allow installing software. Built again with FMESS_PORTABLE
+      # set (only bimbimbambam's own crate compiles again), so its update prompt
+      # downloads the new .exe instead of running the installer.
+      - name: Attach the portable Windows app
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FMESS_PORTABLE: '1'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npx tauri build --no-bundle ${{ steps.options.outputs.args }}
+          mkdir -p portable
+          cp src-tauri/target/release/bimbimbambam.exe portable/bimbimbambam-windows-portable.exe
+          ls -la portable
+          gh release upload "${{ github.ref_name }}" portable/bimbimbambam-windows-portable.exe --clobber --repo "${{ github.repository }}"
+
+  # Each build adds its platforms to latest.json, the file the app's updater
+  # reads; make sure none went missing before the draft is published.
+  check:
+    needs: [create-release, build]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ID: ${{ needs.create-release.outputs.id }}
+        run: |
+          asset=$(gh api "repos/$REPO/releases/$ID" --jq '.assets[] | select(.name == "latest.json") | .id')
+          gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$asset" > latest.json
+          for platform in darwin-aarch64 darwin-x86_64 linux-x86_64 windows-x86_64; do
+            jq -e ".platforms[\"$platform\"]" latest.json > /dev/null || { echo "latest.json has no $platform"; exit 1; }
+          done
+          jq -r '.platforms | keys | join(", ")' latest.json
+          gh api "repos/$REPO/releases/$ID" --jq '.assets[].name' | grep -qx bimbimbambam-windows-portable.exe || { echo "No bimbimbambam-windows-portable.exe"; exit 1; }

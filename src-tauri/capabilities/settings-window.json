@@ -1,0 +1,26 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings-window",
+  "description": "The local Settings window reads and saves the app's settings, opens user-added websites in isolated windows, Messenger's preferences through Messenger's window, sends a test notification, lists, adds and removes themes and fonts, chooses or resets the app icon, and checks for updates.",
+  "windows": [
+    "settings"
+  ],
+  "permissions": [
+    "allow-get-settings",
+    "allow-update-settings",
+    "allow-open-website",
+    "allow-set-messenger-pref",
+    "allow-open-messenger-preferences",
+    "allow-test-notification",
+    "allow-list-themes",
+    "allow-add-theme",
+    "allow-remove-theme",
+    "allow-list-fonts",
+    "allow-add-font",
+    "allow-remove-font",
+    "allow-choose-app-icon",
+    "allow-reset-app-icon",
+    "allow-check-for-updates",
+    "core:app:allow-version"
+  ]
+}

@@ -1,0 +1,112 @@
+[package]
+name = "bimbimbambam"
+version = "0.1.37"
+description = "Desktop client for Messenger and user-added websites"
+authors = ["Toan Ho", "bimbimbambam contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.80"
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.5", features = ["tray-icon", "image-png", "image-ico"] }
+tauri-plugin-notification = "2.8.0"
+tauri-plugin-opener = "2.7.2"
+tauri-plugin-window-state = "2.5.0"
+tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-autostart = "2.7.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.21"
+# Already part of Tauri: reads a theme the way the browser will.
+cssparser = "0.37"
+tauri-plugin-updater = "2.12.0"
+tauri-plugin-dialog = "2.7.3"
+tokio = { version = "1.53.3", features = ["time"] }
+# The system's preferred language, for fMess's own words (see i18n.rs).
+sys-locale = "0.3"
+# Settings › Font: the fonts the system has, and the names in a font file.
+fontdb = "0.24"
+ttf-parser = "0.25"
+
+[features]
+# Live checks only (tests/app/live-check.sh): lets a debug build's page go
+# through a local proxy (FMESS_PROXY) that can cut the network. On macOS that
+# needs macOS 14 (Network.framework proxies), above fMess's minimum, so it is
+# never in a release build.
+test-proxy = ["tauri/macos-proxy"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSAttributedString",
+    "NSColor",
+    "NSFont",
+    "NSImage",
+    "NSParagraphStyle",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSText",
+    "NSWindow",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSAttributedString",
+    "NSData",
+    "NSDictionary",
+    "NSDistributedNotificationCenter",
+    "NSError",
+    "NSNotification",
+    "NSObject",
+    "NSRange",
+    "NSSet",
+    "NSString",
+    "NSURL",
+    "NSUserDefaults",
+] }
+objc2-intents = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "INImage",
+    "INIntent",
+    "INIntentResponse",
+    "INInteraction",
+    "INOutgoingMessageType",
+    "INPerson",
+    "INPersonHandle",
+    "INSendMessageAttachment",
+    "INSendMessageIntent",
+    "INSpeakableString",
+] }
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "bitflags",
+    "UNNotification",
+    "UNNotificationAction",
+    "UNNotificationAttachment",
+    "UNNotificationCategory",
+    "UNNotificationContent",
+    "UNNotificationRequest",
+    "UNNotificationResponse",
+    "UNNotificationTrigger",
+    "UNUserNotificationCenter",
+] }
+
+[target.'cfg(windows)'.dependencies]
+# The photo viewer turns WebView2's zoom gestures on and off (webview.rs).
+webview2-com = "0.39"
+windows-core = "0.62"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
